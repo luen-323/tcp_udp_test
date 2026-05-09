@@ -6,6 +6,8 @@ import * as path from 'path'
 let mainWindow: BrowserWindow | null = null
 let udpSocket: dgram.Socket | null = null
 let tcpSocket: net.Socket | null = null
+let tcpServer: net.Server | null = null
+let tcpServerClients: net.Socket[] = []
 
 function getPreloadPath(): string {
   if (app.isPackaged) {
@@ -225,6 +227,192 @@ ipcMain.handle('tcp:disconnect', async () => {
   }
 })
 
+// TCP Server handlers
+ipcMain.handle('tcp:server:start', async (_event, { port }) => {
+  try {
+    if (tcpServer) {
+      tcpServer.close()
+    }
+    
+    tcpServerClients = []
+    tcpServer = net.createServer()
+
+    return new Promise((resolve) => {
+      tcpServer!.listen(port, () => {
+        if (mainWindow) {
+          mainWindow.webContents.send('tcp:server:on-status', { 
+            status: 'listening',
+            message: `Server started on port ${port}` 
+          })
+        }
+        resolve({ success: true })
+      })
+
+      tcpServer!.on('connection', (socket) => {
+        const clientAddress = `${socket.remoteAddress}:${socket.remotePort}`
+        
+        if (mainWindow) {
+          mainWindow.webContents.send('tcp:server:on-client-connect', {
+            address: socket.remoteAddress,
+            port: socket.remotePort,
+            id: clientAddress
+          })
+        }
+
+        socket.on('data', (data) => {
+          if (mainWindow) {
+            mainWindow.webContents.send('tcp:server:on-data', {
+              data: data.toString('hex'),
+              size: data.length,
+              address: socket.remoteAddress,
+              port: socket.remotePort,
+              id: clientAddress
+            })
+          }
+        })
+
+        socket.on('close', () => {
+          if (mainWindow) {
+            mainWindow.webContents.send('tcp:server:on-client-disconnect', {
+              address: socket.remoteAddress,
+              port: socket.remotePort,
+              id: clientAddress
+            })
+          }
+        })
+
+        socket.on('error', (err) => {
+          if (mainWindow) {
+            mainWindow.webContents.send('tcp:server:on-error', {
+              error: err.message,
+              address: socket.remoteAddress,
+              port: socket.remotePort,
+              id: clientAddress
+            })
+          }
+        })
+
+        tcpServerClients.push(socket)
+      })
+
+      tcpServer!.on('error', (err) => {
+        if (mainWindow) {
+          mainWindow.webContents.send('tcp:server:on-status', { 
+            status: 'error',
+            error: err.message 
+          })
+        }
+        resolve({ success: false, error: err.message })
+      })
+    })
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('tcp:server:send', async (_event, { clientId, message, isHex }) => {
+  try {
+    if (!tcpServer || tcpServerClients.length === 0) {
+      return { success: false, error: 'No clients connected' }
+    }
+
+    let data: Buffer
+    if (isHex) {
+      const hex = message.replace(/\s/g, '')
+      data = Buffer.from(hex, 'hex')
+    } else {
+      data = Buffer.from(message, 'utf8')
+    }
+
+    let sent = false
+    const clientAddress = clientId || ''
+
+    for (const client of tcpServerClients) {
+      const targetClient = `${client.remoteAddress}:${client.remotePort}`
+      if (!clientId || targetClient === clientAddress) {
+        client.write(data)
+        sent = true
+      }
+    }
+
+    if (sent) {
+      return { success: true }
+    } else {
+      return { success: false, error: 'Client not found' }
+    }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('tcp:server:broadcast', async (_event, { message, isHex }) => {
+  try {
+    if (!tcpServer || tcpServerClients.length === 0) {
+      return { success: false, error: 'No clients connected' }
+    }
+
+    let data: Buffer
+    if (isHex) {
+      const hex = message.replace(/\s/g, '')
+      data = Buffer.from(hex, 'hex')
+    } else {
+      data = Buffer.from(message, 'utf8')
+    }
+
+    for (const client of tcpServerClients) {
+      client.write(data)
+    }
+
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('tcp:server:disconnect-client', async (_event, { clientId }) => {
+  try {
+    const targetAddress = clientId || ''
+    
+    for (let i = tcpServerClients.length - 1; i >= 0; i--) {
+      const client = tcpServerClients[i]
+      const clientAddress = `${client.remoteAddress}:${client.remotePort}`
+      if (!clientId || clientAddress === targetAddress) {
+        client.destroy()
+        tcpServerClients.splice(i, 1)
+      }
+    }
+
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('tcp:server:stop', async () => {
+  try {
+    for (const client of tcpServerClients) {
+      client.destroy()
+    }
+    tcpServerClients = []
+
+    if (tcpServer) {
+      tcpServer.close()
+      tcpServer = null
+    }
+
+    if (mainWindow) {
+      mainWindow.webContents.send('tcp:server:on-status', { 
+        status: 'stopped',
+        message: 'Server stopped' 
+      })
+    }
+
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     if (udpSocket) {
@@ -232,6 +420,9 @@ app.on('window-all-closed', () => {
     }
     if (tcpSocket) {
       tcpSocket.destroy()
+    }
+    if (tcpServer) {
+      tcpServer.close()
     }
     app.quit()
   }

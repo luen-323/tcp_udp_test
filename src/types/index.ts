@@ -9,9 +9,12 @@ export interface NetworkMessage {
   success: boolean
   error?: string
   size?: number
+  clientId?: string
 }
 
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error' | 'listening' | 'stopped'
+
+export type TcpMode = 'client' | 'server'
 
 export interface AppConfig {
   encoding: 'utf-8' | 'gbk' | 'ascii'
@@ -28,8 +31,27 @@ export interface UdpConfig {
 }
 
 export interface TcpConfig {
+  mode: TcpMode
   address: string
   port: number
+}
+
+export interface TcpServerClient {
+  id: string
+  address: string
+  port: number
+  connectedAt: Date
+}
+
+export interface TcpReceivedData {
+  id: string
+  data: string
+  address: string
+  port: number
+  clientId: string
+  size: number
+  timestamp: Date
+  isHex: boolean
 }
 
 declare global {
@@ -48,6 +70,18 @@ declare global {
         disconnect: () => Promise<{ success: boolean; error?: string }>
         onData: (callback: (data: { data: string; size: number }) => void) => void
         onStatus: (callback: (status: { status: string; error?: string }) => void) => void
+      }
+      tcpServer: {
+        start: (port: number) => Promise<{ success: boolean; error?: string }>
+        send: (clientId: string, message: string, isHex?: boolean) => Promise<{ success: boolean; error?: string }>
+        broadcast: (message: string, isHex?: boolean) => Promise<{ success: boolean; error?: string }>
+        disconnectClient: (clientId: string) => Promise<{ success: boolean; error?: string }>
+        stop: () => Promise<{ success: boolean; error?: string }>
+        onStatus: (callback: (status: { status: string; message?: string; error?: string }) => void) => void
+        onClientConnect: (callback: (client: { address: string; port: number; id: string }) => void) => void
+        onClientDisconnect: (callback: (client: { address: string; port: number; id: string }) => void) => void
+        onData: (callback: (data: { data: string; size: number; address: string; port: number; id: string }) => void) => void
+        onError: (callback: (error: { error: string; address: string; port: number; id: string }) => void) => void
       }
     }
   }

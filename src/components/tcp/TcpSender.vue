@@ -6,16 +6,27 @@ const tcpStore = useTcpStore()
 
 const message = ref('')
 const isHex = ref(false)
-
-const emit = defineEmits<{
-  send: [message: string, isHex: boolean]
-}>()
+const selectedClientId = ref<string | null>(null)
 
 const isConnected = computed(() => tcpStore.status === 'connected')
+const isListening = computed(() => tcpStore.status === 'listening')
+const isServerMode = computed(() => tcpStore.mode === 'server')
+const canSend = computed(() => {
+  if (isServerMode.value) {
+    return isListening.value && tcpStore.connectedClients.length > 0
+  }
+  return isConnected.value
+})
 
 const handleSend = () => {
-  if (message.value.trim() && isConnected.value) {
-    emit('send', message.value, isHex.value)
+  if (message.value.trim() && canSend.value) {
+    if (isServerMode.value) {
+      // Server mode - use broadcast or specific client
+      tcpStore.serverSend(message.value, isHex.value, selectedClientId.value || undefined)
+    } else {
+      // Client mode
+      tcpStore.sendMessage(message.value, isHex.value)
+    }
     message.value = ''
   }
 }
@@ -25,6 +36,13 @@ const handleKeyDown = (e: KeyboardEvent) => {
     handleSend()
   }
 }
+
+const handleBroadcast = () => {
+  if (message.value.trim() && canSend.value) {
+    tcpStore.serverSend(message.value, isHex.value, undefined) // undefined means broadcast
+    message.value = ''
+  }
+}
 </script>
 
 <template>
@@ -32,12 +50,13 @@ const handleKeyDown = (e: KeyboardEvent) => {
     <h3 class="card-title">✉️ 发送数据</h3>
     
     <div class="sender-content">
+      <!-- Mode Toggle -->
       <div class="mode-toggle">
         <button 
           class="mode-btn"
           :class="{ active: !isHex }"
           @click="isHex = false"
-          :disabled="!isConnected"
+          :disabled="!canSend"
         >
           文本模式
         </button>
@@ -45,32 +64,58 @@ const handleKeyDown = (e: KeyboardEvent) => {
           class="mode-btn"
           :class="{ active: isHex }"
           @click="isHex = true"
-          :disabled="!isConnected"
+          :disabled="!canSend"
         >
           Hex 模式
         </button>
       </div>
       
+      <!-- Server Mode: Client Selection -->
+      <div v-if="isServerMode && tcpStore.connectedClients.length > 0" class="client-selector">
+        <label>发送到:</label>
+        <select v-model="selectedClientId">
+          <option :value="null">广播到所有客户端</option>
+          <option 
+            v-for="client in tcpStore.connectedClients" 
+            :key="client.id"
+            :value="client.id"
+          >
+            {{ client.id }}
+          </option>
+        </select>
+      </div>
+      
+      <!-- Message Input -->
       <textarea
         v-model="message"
         class="message-input"
-        :placeholder="isConnected 
+        :placeholder="canSend 
           ? (isHex ? '输入十六进制数据 (例如: 48656C6C6F20576F726C64)' : '输入要发送的文本数据')
-          : '请先建立 TCP 连接'"
+          : (isServerMode ? '请先启动服务器并等待客户端连接' : '请先建立 TCP 连接')"
         rows="6"
         @keydown="handleKeyDown"
-        :disabled="!isConnected"
+        :disabled="!canSend"
       ></textarea>
       
       <div class="sender-actions">
         <span class="hint">Ctrl + Enter 快捷发送</span>
-        <button 
-          class="btn btn-primary"
-          @click="handleSend"
-          :disabled="!message.trim() || !isConnected"
-        >
-          🚀 发送
-        </button>
+        <div class="action-buttons">
+          <button 
+            v-if="isServerMode && tcpStore.connectedClients.length > 0"
+            class="btn btn-secondary"
+            @click="handleBroadcast"
+            :disabled="!message.trim() || !canSend"
+          >
+            📢 广播
+          </button>
+          <button 
+            class="btn btn-primary"
+            @click="handleSend"
+            :disabled="!message.trim() || !canSend"
+          >
+            🚀 发送
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -111,6 +156,34 @@ const handleKeyDown = (e: KeyboardEvent) => {
   cursor: not-allowed;
 }
 
+.client-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.client-selector label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.client-selector select {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.client-selector select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
 .message-input {
   width: 100%;
   font-family: 'JetBrains Mono', 'Consolas', monospace;
@@ -137,6 +210,11 @@ const handleKeyDown = (e: KeyboardEvent) => {
 .hint {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
 }
 
 .btn:disabled {

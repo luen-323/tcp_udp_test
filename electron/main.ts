@@ -1,32 +1,55 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import * as dgram from 'dgram'
 import * as net from 'net'
+import * as path from 'path'
 
 let mainWindow: BrowserWindow | null = null
 let udpSocket: dgram.Socket | null = null
 let tcpSocket: net.Socket | null = null
 
+function getPreloadPath(): string {
+  if (app.isPackaged) {
+    return path.join(__dirname, 'preload.js')
+  }
+  return path.join(__dirname, 'preload.js')
+}
+
+function getIndexPath(): string {
+  if (app.isPackaged) {
+    return path.join(__dirname, '../dist/index.html')
+  }
+  return path.join(process.cwd(), 'dist/index.html')
+}
+
 function createWindow() {
+  const preloadPath = getPreloadPath()
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
     webPreferences: {
-      preload: 'dist-electron/preload.js',
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false
     },
-    backgroundColor: '#0F0F1A',
-    titleBarStyle: 'hiddenInset'
+    backgroundColor: '#0F0F1A'
   })
 
-  if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL
+  
+  if (devServerUrl) {
+    mainWindow.loadURL(devServerUrl)
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile('dist/index.html')
+    const indexPath = getIndexPath()
+    mainWindow.loadFile(indexPath)
   }
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
 }
 
 app.whenReady().then(() => {
@@ -204,6 +227,12 @@ ipcMain.handle('tcp:disconnect', async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    if (udpSocket) {
+      udpSocket.close()
+    }
+    if (tcpSocket) {
+      tcpSocket.destroy()
+    }
     app.quit()
   }
 })
